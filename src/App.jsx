@@ -113,9 +113,12 @@ export default function InvestorVault() {
           }
         } catch {}
       }));
+      setPrices(next);
+      setLastUpdated(new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}));
     } catch {
       setError("Failed to fetch prices. Check your connection and API keys.");
     }
+    setLoading(false);
   };
 
   useEffect(() => { fetchPrices(); }, [portfolio.length]);
