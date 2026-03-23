@@ -16,13 +16,12 @@ const INITIAL_PORTFOLIO = [
   { ticker: "XRPUSDT", shares: 0, buyPrice: 0 },
 ];
 
-const ANTHROPIC_KEY   = import.meta.env.VITE_ANTHROPIC_API_KEY;
+const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY;
 
 const isCrypto  = (t) => !!CRYPTO_MAP[t.toUpperCase()];
 const fmt       = (n) => (n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmtPct    = (n) => (n>=0?"+":"")+(n||0).toFixed(2)+"%";
 const fmtDollar = (n) => (n>=0?"+$":"-$")+Math.abs(n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
-
 const COLORS = ["#c9a84c","#4ade80","#60a5fa","#f59e0b","#a78bfa","#f472b6","#34d399","#fb923c"];
 
 const DonutChart = ({ slices, total }) => {
@@ -30,10 +29,10 @@ const DonutChart = ({ slices, total }) => {
   const S=200,cx=100,cy=100,r=78,inn=50;
   let cum=-Math.PI/2;
   const paths=slices.map((s,i)=>{
-    const a=(s.value/total)*2*Math.PI, mid=cum+a/2;
+    const a=(s.value/total)*2*Math.PI,mid=cum+a/2;
     const p=`M${cx+inn*Math.cos(cum)} ${cy+inn*Math.sin(cum)}L${cx+r*Math.cos(cum)} ${cy+r*Math.sin(cum)}A${r} ${r} 0 ${a>Math.PI?1:0} 1 ${cx+r*Math.cos(cum+a)} ${cy+r*Math.sin(cum+a)}L${cx+inn*Math.cos(cum+a)} ${cy+inn*Math.sin(cum+a)}A${inn} ${inn} 0 ${a>Math.PI?1:0} 0 ${cx+inn*Math.cos(cum)} ${cy+inn*Math.sin(cum)}Z`;
     cum+=a;
-    return {p,color:COLORS[i%COLORS.length],ticker:s.ticker,value:s.value,pct:(s.value/total*100).toFixed(1),mid};
+    return{p,color:COLORS[i%COLORS.length],ticker:s.ticker,value:s.value,pct:(s.value/total*100).toFixed(1),mid};
   });
   const act=hov!==null?paths[hov]:null;
   return(
@@ -46,7 +45,7 @@ const DonutChart = ({ slices, total }) => {
             onMouseEnter={()=>setHov(i)} onMouseLeave={()=>setHov(null)}/>
         ))}
         <text x={cx} y={cy-10} textAnchor="middle" fill={act?act.color:"#c9a84c"} fontSize="12" fontFamily="monospace" fontWeight="700">{act?act.ticker:"TOTAL"}</text>
-        <text x={cx} y={cy+6}  textAnchor="middle" fill="#e8d5a3" fontSize="11" fontFamily="monospace">{act?`$${fmt(act.value)}`:`$${fmt(total)}`}</text>
+        <text x={cx} y={cy+6} textAnchor="middle" fill="#e8d5a3" fontSize="11" fontFamily="monospace">{act?`$${fmt(act.value)}`:`$${fmt(total)}`}</text>
         <text x={cx} y={cy+20} textAnchor="middle" fill={act?act.color:"#555"} fontSize="10" fontFamily="monospace">{act?`${act.pct}%`:"invested"}</text>
       </svg>
       <div style={{display:"flex",flexDirection:"column",gap:"5px",width:"100%"}}>
@@ -72,7 +71,7 @@ const DonutChart = ({ slices, total }) => {
 
 export default function InvestorVault() {
   const [portfolio, setPortfolio] = useState(() => {
-    try { const s=localStorage.getItem("vault_v2"); return s?JSON.parse(s):INITIAL_PORTFOLIO; } catch { return INITIAL_PORTFOLIO; }
+    try{const s=localStorage.getItem("vault_v2");return s?JSON.parse(s):INITIAL_PORTFOLIO;}catch{return INITIAL_PORTFOLIO;}
   });
   const [prices, setPrices]           = useState({});
   const [loading, setLoading]         = useState(false);
@@ -86,45 +85,37 @@ export default function InvestorVault() {
   const [error, setError]             = useState(null);
 
   useEffect(() => {
-    try { localStorage.setItem("vault_v2", JSON.stringify(portfolio)); } catch {}
+    try{localStorage.setItem("vault_v2",JSON.stringify(portfolio));}catch{}
   }, [portfolio]);
 
+  // Route ALL price fetches through /api/quote proxy
   const fetchPrices = async () => {
     setLoading(true);
     setError(null);
     const next = {};
-
     try {
-      // ── Crypto via CoinCap (free, no key) ──
-      const cryptoTickers = portfolio.filter(p => isCrypto(p.ticker));
-      if (cryptoTickers.length > 0) {
-        const ids = cryptoTickers.map(p => CRYPTO_MAP[p.ticker.toUpperCase()]).filter(Boolean).join(",");
-        const res  = await fetch(`https://api.coincap.io/v2/assets?ids=${ids}`);
-        const json = await res.json();
-        (json?.data || []).forEach(coin => {
-          const ticker = Object.keys(CRYPTO_MAP).find(k => CRYPTO_MAP[k] === coin.id);
-          if (!ticker) return;
-          const current   = parseFloat(coin.priceUsd) || 0;
-          const changePct = parseFloat(coin.changePercent24Hr) || 0;
-          const change    = current * (changePct / 100);
-          if (current > 0) next[ticker] = { current, change, changePct };
-        });
-      }
-
-      // ── Stocks via Finnhub ──
-      const stockTickers = portfolio.filter(p => !isCrypto(p.ticker));
-      await Promise.all(stockTickers.map(async (pos) => {
+      await Promise.all(portfolio.map(async (pos) => {
         try {
-          const res  = await fetch(`/api/quote?symbol=${pos.ticker}`);
+          const coin = isCrypto(pos.ticker);
+          const symbol = coin ? CRYPTO_MAP[pos.ticker.toUpperCase()] : pos.ticker;
+          const url = coin
+            ? `/api/quote?symbol=${symbol}&type=crypto`
+            : `/api/quote?symbol=${symbol}`;
+          const res  = await fetch(url);
           const data = await res.json();
-          if (data.c && data.c > 0) next[pos.ticker] = { current: data.c, change: data.d || 0, changePct: data.dp || 0 };
+          if (data.c && data.c > 0) {
+            next[pos.ticker] = {
+              current:   data.c,
+              change:    data.d   || 0,
+              changePct: data.dp  || 0,
+            };
+          }
         } catch {}
       }));
-
       setPrices(next);
       setLastUpdated(new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}));
-    } catch (e) {
-      setError("Failed to fetch prices. Check your connection.");
+    } catch {
+      setError("Failed to fetch prices. Check your connection and API keys.");
     }
     setLoading(false);
   };
@@ -139,9 +130,9 @@ export default function InvestorVault() {
       const current = pr?.current || 0;
       const gain = (current - p.buyPrice) * p.shares;
       const gainPct = p.buyPrice > 0 ? ((current - p.buyPrice) / p.buyPrice) * 100 : 0;
-      return `${p.ticker}: ${p.shares} shares @ $${p.buyPrice} buy price, current $${current.toFixed(2)}, P&L: $${gain.toFixed(2)} (${gainPct.toFixed(1)}%)`;
+      return `${p.ticker}: ${p.shares} shares @ $${p.buyPrice} buy, current $${current.toFixed(2)}, P&L: $${gain.toFixed(2)} (${gainPct.toFixed(1)}%)`;
     }).join("\n");
-    const prompt = `You are an expert portfolio analyst. Here is Jean's current portfolio:\n\n${rows}\n\nTotal invested: $${totalCost.toFixed(2)}\nTotal value: $${totalValue.toFixed(2)}\nAll-time gain/loss: $${totalGain.toFixed(2)} (${totalGainPct.toFixed(1)}%)\n\nProvide a concise portfolio review covering:\n1. Overall health score out of 10\n2. Key strengths (what's working)\n3. Key risks or concerns\n4. Sector/concentration analysis\n5. 2-3 specific actionable suggestions\n\nBe direct, specific, and use the actual numbers. Keep it under 300 words.`;
+    const prompt = `You are an expert portfolio analyst. Here is Jean's portfolio:\n\n${rows}\n\nTotal invested: $${totalCost.toFixed(2)}\nTotal value: $${totalValue.toFixed(2)}\nAll-time P&L: $${totalGain.toFixed(2)} (${totalGainPct.toFixed(1)}%)\n\nGive a concise review covering:\n1. Health score out of 10\n2. Key strengths\n3. Key risks\n4. Sector concentration\n5. 2-3 actionable suggestions\n\nBe direct and specific. Under 300 words.`;
     try {
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -161,7 +152,7 @@ export default function InvestorVault() {
       const text = data.content?.find(b => b.type === "text")?.text;
       setAiReview(text || "Could not generate review.");
     } catch {
-      setAiReview("AI review failed. Make sure VITE_ANTHROPIC_API_KEY is set in your Vercel environment variables.");
+      setAiReview("AI review failed. Make sure VITE_ANTHROPIC_API_KEY is set in Vercel.");
     }
     setAiLoading(false);
   };
@@ -376,7 +367,7 @@ export default function InvestorVault() {
             {!aiReview&&!aiLoading&&(
               <div style={{background:"#0a0a0a",border:"1px solid #1e1e1e",borderRadius:"16px",padding:"20px"}}>
                 <div style={{fontSize:"10px",color:"#555",textTransform:"uppercase",letterSpacing:"0.15em",marginBottom:"12px"}}>What the review covers</div>
-                {[["📊 Health Score","Overall portfolio rating out of 10"],["💪 Strengths","What positions are working in your favor"],["⚠️ Risks","Concentration issues, volatility exposure"],["🏦 Sector Analysis","How balanced your holdings are"],["💡 Suggestions","Specific actionable next steps"]].map(([icon,desc])=>(
+                {[["📊 Health Score","Overall portfolio rating out of 10"],["💪 Strengths","What positions are working"],["⚠️ Risks","Concentration and volatility issues"],["🏦 Sector Analysis","How balanced your holdings are"],["💡 Suggestions","Specific actionable next steps"]].map(([icon,desc])=>(
                   <div key={icon} style={{display:"flex",gap:"12px",padding:"10px 0",borderBottom:"1px solid #111",alignItems:"flex-start"}}>
                     <div style={{fontSize:"16px",flexShrink:0}}>{icon.split(" ")[0]}</div>
                     <div>
