@@ -103,21 +103,19 @@ export default function InvestorVault() {
             : `/api/quote?symbol=${symbol}`;
           const res  = await fetch(url);
           const data = await res.json();
-          if (data.c && data.c > 0) {
+          const price = parseFloat(data.c);
+          if (price > 0) {
             next[pos.ticker] = {
-              current:   data.c,
-              change:    data.d   || 0,
-              changePct: data.dp  || 0,
+              current:   price,
+              change:    parseFloat(data.d)  || 0,
+              changePct: parseFloat(data.dp) || 0,
             };
           }
         } catch {}
       }));
-      setPrices(next);
-      setLastUpdated(new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}));
     } catch {
       setError("Failed to fetch prices. Check your connection and API keys.");
     }
-    setLoading(false);
   };
 
   useEffect(() => { fetchPrices(); }, [portfolio.length]);
@@ -254,7 +252,9 @@ export default function InvestorVault() {
                       <div style={{fontSize:"13px",fontWeight:"800",fontFamily:"'Syne',sans-serif",color:"#e8d5a3"}}>{pos.ticker}</div>
                       {p&&<div style={{fontSize:"9px",color:p.changePct>=0?"#4ade80":"#ef4444",marginTop:"2px"}}>{p.changePct>=0?"▲":"▼"} {Math.abs((p.changePct||0).toFixed(2))}% today</div>}
                     </div>
-                    <div style={{fontSize:"12px",color:current>0?"#e8d5a3":"#333"}}>{current>0?`$${fmt(current)}`:loading?"...":"—"}</div>
+                    <div style={{fontSize:"12px",color:current>0?"#e8d5a3":"#555"}}>
+                      {current>0?`$${fmt(current)}`:loading?"...":p?.marketClosed?"Closed":"—"}
+                    </div>
                     {editMode
                       ?<input type="number" value={editData[pos.ticker]?.buyPrice||""} onChange={e=>setEditData(prev=>({...prev,[pos.ticker]:{...prev[pos.ticker],buyPrice:e.target.value}}))} style={{...inp,width:"80px"}} placeholder="$"/>
                       :<div style={{fontSize:"12px",color:"#666"}}>${fmt(pos.buyPrice)}</div>
