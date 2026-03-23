@@ -1,0 +1,8 @@
+{
+  "name": "Investor Vault",
+  "short_name": "Vault",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#080808",
+  "theme_color": "#c9a84c"
+}
