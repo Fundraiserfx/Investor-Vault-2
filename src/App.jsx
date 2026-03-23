@@ -16,7 +16,6 @@ const INITIAL_PORTFOLIO = [
   { ticker: "XRPUSDT", shares: 0, buyPrice: 0 },
 ];
 
-const FINNHUB_KEY     = import.meta.env.VITE_FINNHUB_API_KEY;
 const ANTHROPIC_KEY   = import.meta.env.VITE_ANTHROPIC_API_KEY;
 
 const isCrypto  = (t) => !!CRYPTO_MAP[t.toUpperCase()];
@@ -116,7 +115,7 @@ export default function InvestorVault() {
       const stockTickers = portfolio.filter(p => !isCrypto(p.ticker));
       await Promise.all(stockTickers.map(async (pos) => {
         try {
-          const res  = await fetch(`https://finnhub.io/api/v1/quote?symbol=${pos.ticker}&token=${FINNHUB_KEY}`);
+          const res  = await fetch(`/api/quote?symbol=${pos.ticker}`);
           const data = await res.json();
           if (data.c && data.c > 0) next[pos.ticker] = { current: data.c, change: data.d || 0, changePct: data.dp || 0 };
         } catch {}
