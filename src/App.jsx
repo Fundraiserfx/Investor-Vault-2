@@ -1,42 +1,28 @@
 import { useState, useEffect } from "react";
 
-// CoinCap asset IDs for crypto
 const CRYPTO_MAP = {
   BTCUSDT: "bitcoin", ETHUSDT: "ethereum", XRPUSDT: "ripple",
   SOLUSDT: "solana",  DOGEUSDT: "dogecoin", BNBUSDT: "binance-coin",
 };
 
 const INITIAL_PORTFOLIO = [
-  { ticker: "NVDA",    shares: 10,  buyPrice: 120.00 },
-  { ticker: "AMD",     shares: 15,  buyPrice: 95.00  },
-  { ticker: "GOOGL",   shares: 5,   buyPrice: 140.00 },
-  { ticker: "VOO",     shares: 8,   buyPrice: 400.00 },
-  { ticker: "DXYZ",    shares: 20,  buyPrice: 22.00  },
-  { ticker: "POET",    shares: 100, buyPrice: 4.50   },
-  { ticker: "BTCUSDT", shares: 0.1, buyPrice: 60000  },
-  { ticker: "XRPUSDT", shares: 500, buyPrice: 0.55   },
+  { ticker: "NVDA",    shares: 0, buyPrice: 0 },
+  { ticker: "AMD",     shares: 0, buyPrice: 0 },
+  { ticker: "GOOGL",   shares: 0, buyPrice: 0 },
+  { ticker: "VOO",     shares: 0, buyPrice: 0 },
+  { ticker: "DXYZ",    shares: 0, buyPrice: 0 },
+  { ticker: "POET",    shares: 0, buyPrice: 0 },
+  { ticker: "BTCUSDT", shares: 0, buyPrice: 0 },
+  { ticker: "XRPUSDT", shares: 0, buyPrice: 0 },
 ];
 
-// Demo prices — stocks use fixed demo, crypto loads live from Coinbase
-const STOCK_DEMOS = {
-  NVDA:    { current: 172.70,   change: -6.30,  changePct: -3.52 },
-  AMD:     { current: 201.33,   change: -2.44,  changePct: -1.20 },
-  GOOGL:   { current: 301.00,   change: -9.10,  changePct: -2.93 },
-  VOO:     { current: 597.94,   change: -8.90,  changePct: -1.47 },
-  DXYZ:    { current: 24.36,    change: -0.64,  changePct: -2.56 },
-  POET:    { current: 5.93,     change: -0.26,  changePct: -4.20 },
-  // Crypto fallbacks — replaced with live prices on load
-  BTCUSDT: { current: 84000.00, change: 0,      changePct: 0 },
-  XRPUSDT: { current: 2.45,     change: 0,      changePct: 0 },
-  ETHUSDT: { current: 1900.00,  change: 0,      changePct: 0 },
-  SOLUSDT: { current: 130.00,   change: 0,      changePct: 0 },
-  DOGEUSDT:{ current: 0.17,     change: 0,      changePct: 0 },
-};
+const FINNHUB_KEY     = import.meta.env.VITE_FINNHUB_API_KEY;
+const ANTHROPIC_KEY   = import.meta.env.VITE_ANTHROPIC_API_KEY;
 
-const isCrypto = (t) => !!CRYPTO_MAP[t.toUpperCase()];
-const fmt      = (n) => (n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
-const fmtPct   = (n) => (n>=0?"+":"")+(n||0).toFixed(2)+"%";
-const fmtDollar= (n) => (n>=0?"+$":"-$")+Math.abs(n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+const isCrypto  = (t) => !!CRYPTO_MAP[t.toUpperCase()];
+const fmt       = (n) => (n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmtPct    = (n) => (n>=0?"+":"")+(n||0).toFixed(2)+"%";
+const fmtDollar = (n) => (n>=0?"+$":"-$")+Math.abs(n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
 
 const COLORS = ["#c9a84c","#4ade80","#60a5fa","#f59e0b","#a78bfa","#f472b6","#34d399","#fb923c"];
 
@@ -86,42 +72,65 @@ const DonutChart = ({ slices, total }) => {
 };
 
 export default function InvestorVault() {
-  const [portfolio, setPortfolio] = useState(INITIAL_PORTFOLIO);
-  const [prices, setPrices]       = useState(STOCK_DEMOS);
-  const [loading, setLoading]     = useState(false);
+  const [portfolio, setPortfolio] = useState(() => {
+    try { const s=localStorage.getItem("vault_v2"); return s?JSON.parse(s):INITIAL_PORTFOLIO; } catch { return INITIAL_PORTFOLIO; }
+  });
+  const [prices, setPrices]           = useState({});
+  const [loading, setLoading]         = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
-  const [tab, setTab]             = useState("holdings");
-  const [editMode, setEditMode]   = useState(false);
-  const [editData, setEditData]   = useState({});
-  const [addForm, setAddForm]     = useState({ticker:"",shares:"",buyPrice:""});
-  const [cryptoStatus, setCryptoStatus] = useState("Fetching live crypto prices...");
-  const [aiReview, setAiReview]         = useState(null);
-  const [aiLoading, setAiLoading]       = useState(false);
+  const [tab, setTab]                 = useState("holdings");
+  const [editMode, setEditMode]       = useState(false);
+  const [editData, setEditData]       = useState({});
+  const [addForm, setAddForm]         = useState({ticker:"",shares:"",buyPrice:""});
+  const [aiReview, setAiReview]       = useState(null);
+  const [aiLoading, setAiLoading]     = useState(false);
+  const [error, setError]             = useState(null);
 
-  const fetchCrypto = async () => {
+  useEffect(() => {
+    try { localStorage.setItem("vault_v2", JSON.stringify(portfolio)); } catch {}
+  }, [portfolio]);
+
+  const fetchPrices = async () => {
     setLoading(true);
-    // Preview simulation — deployed app uses live API
-    // Prices fluctuate slightly each refresh to simulate live data
-    const variance = () => (Math.random() - 0.5) * 0.004;
-    const LIVE_PRICES = {
-      BTCUSDT: { base: 84200,  pct:  2.34 },
-      XRPUSDT: { base: 2.48,   pct:  4.12 },
-      ETHUSDT: { base: 1892,   pct: -1.20 },
-      SOLUSDT: { base: 128.50, pct:  1.85 },
-      DOGEUSDT:{ base: 0.168,  pct: -0.92 },
-    };
-    Object.entries(LIVE_PRICES).forEach(([ticker, data]) => {
-      const current   = data.base * (1 + variance());
-      const changePct = data.pct + (Math.random() - 0.5) * 0.2;
-      const change    = current * (changePct / 100);
-      setPrices(prev => ({ ...prev, [ticker]: { current, change, changePct } }));
-    });
-    setCryptoStatus("✓ Preview mode — crypto prices simulated · Will be live in deployed app");
-    setLastUpdated(new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}));
+    setError(null);
+    const next = {};
+
+    try {
+      // ── Crypto via CoinCap (free, no key) ──
+      const cryptoTickers = portfolio.filter(p => isCrypto(p.ticker));
+      if (cryptoTickers.length > 0) {
+        const ids = cryptoTickers.map(p => CRYPTO_MAP[p.ticker.toUpperCase()]).filter(Boolean).join(",");
+        const res  = await fetch(`https://api.coincap.io/v2/assets?ids=${ids}`);
+        const json = await res.json();
+        (json?.data || []).forEach(coin => {
+          const ticker = Object.keys(CRYPTO_MAP).find(k => CRYPTO_MAP[k] === coin.id);
+          if (!ticker) return;
+          const current   = parseFloat(coin.priceUsd) || 0;
+          const changePct = parseFloat(coin.changePercent24Hr) || 0;
+          const change    = current * (changePct / 100);
+          if (current > 0) next[ticker] = { current, change, changePct };
+        });
+      }
+
+      // ── Stocks via Finnhub ──
+      const stockTickers = portfolio.filter(p => !isCrypto(p.ticker));
+      await Promise.all(stockTickers.map(async (pos) => {
+        try {
+          const res  = await fetch(`https://finnhub.io/api/v1/quote?symbol=${pos.ticker}&token=${FINNHUB_KEY}`);
+          const data = await res.json();
+          if (data.c && data.c > 0) next[pos.ticker] = { current: data.c, change: data.d || 0, changePct: data.dp || 0 };
+        } catch {}
+      }));
+
+      setPrices(next);
+      setLastUpdated(new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}));
+    } catch (e) {
+      setError("Failed to fetch prices. Check your connection.");
+    }
     setLoading(false);
   };
 
-  useEffect(() => { fetchCrypto(); }, []);
+  useEffect(() => { fetchPrices(); }, [portfolio.length]);
 
   const getAiReview = async () => {
     setAiLoading(true);
@@ -139,7 +148,7 @@ export default function InvestorVault() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": import.meta.env.VITE_ANTHROPIC_API_KEY || "",
+          "x-api-key": ANTHROPIC_KEY,
           "anthropic-version": "2023-06-01",
           "anthropic-dangerous-direct-browser-access": "true"
         },
@@ -151,9 +160,9 @@ export default function InvestorVault() {
       });
       const data = await res.json();
       const text = data.content?.find(b => b.type === "text")?.text;
-      setAiReview(text || "Could not generate review. Add your Anthropic API key to enable this feature.");
+      setAiReview(text || "Could not generate review.");
     } catch {
-      setAiReview("AI review requires your Anthropic API key. Add VITE_ANTHROPIC_API_KEY to your Vercel environment variables.");
+      setAiReview("AI review failed. Make sure VITE_ANTHROPIC_API_KEY is set in your Vercel environment variables.");
     }
     setAiLoading(false);
   };
@@ -176,25 +185,22 @@ export default function InvestorVault() {
     <div style={{minHeight:"100vh",width:"100%",background:"#080808",color:"#e8d5a3",fontFamily:"monospace",backgroundImage:"radial-gradient(ellipse at 0% 0%, #1a1200 0%, transparent 50%), radial-gradient(ellipse at 100% 100%, #0a0f00 0%, transparent 50%)"}}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&display=swap');
-        *{box-sizing:border-box} .rh:hover{background:#111!important} .tb{transition:all 0.2s}
-        input:focus{border-color:#c9a84c!important} .rb:hover{background:#c9a84c22!important}
+        html,body{margin:0;padding:0;width:100%} *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+        ::-webkit-scrollbar{width:3px;height:3px} ::-webkit-scrollbar-thumb{background:#333}
+        .rh:hover{background:#111!important} .tb{transition:all 0.2s} input:focus{border-color:#c9a84c!important}
+        .rb:hover{background:#c9a84c22!important}
       `}</style>
-
-      {/* Status bar */}
-      <div style={{background:"#0c0c0c",padding:"4px 16px",borderBottom:"1px solid #1a1a1a"}}>
-        <div style={{fontSize:"10px",color:cryptoStatus.startsWith("✓")?"#4ade80":"#888"}}>{cryptoStatus} · Stocks shown as demo (live in deployed app)</div>
-      </div>
 
       {/* Header */}
       <div style={{borderBottom:"1px solid #1e1e1e",padding:"14px 16px"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div>
             <div style={{fontSize:"9px",color:"#555",letterSpacing:"0.2em",textTransform:"uppercase",marginBottom:"2px"}}>Investor Vault</div>
-            <div style={{fontSize:"26px",fontFamily:"'Syne',sans-serif",fontWeight:"800",color:"#e8d5a3"}}>PORTFOLIO</div>
+            <div style={{fontSize:"clamp(22px,5vw,28px)",fontFamily:"'Syne',sans-serif",fontWeight:"800",color:"#e8d5a3"}}>PORTFOLIO</div>
           </div>
           <div style={{textAlign:"right"}}>
             <div style={{fontSize:"9px",color:"#555",textTransform:"uppercase",letterSpacing:"0.1em"}}>Total Value</div>
-            <div style={{fontSize:"24px",color:"#c9a84c"}}>${fmt(totalValue)}</div>
+            <div style={{fontSize:"clamp(20px,5vw,26px)",color:"#c9a84c"}}>${fmt(totalValue)}</div>
             <div style={{fontSize:"11px",color:totalGain>=0?"#4ade80":"#ef4444"}}>{fmtDollar(totalGain)} ({fmtPct(totalGainPct)}) all time</div>
           </div>
         </div>
@@ -213,7 +219,7 @@ export default function InvestorVault() {
           ))}
           <div style={{marginLeft:"auto",display:"flex",gap:"8px",alignItems:"center",flexShrink:0}}>
             {lastUpdated&&<div style={{fontSize:"9px",color:"#333"}}>Updated {lastUpdated}</div>}
-            <button className="rb" onClick={fetchCrypto} disabled={loading} style={{padding:"5px 10px",background:"transparent",border:"1px solid #2a2a2a",borderRadius:"6px",color:"#888",cursor:"pointer",fontSize:"11px"}}>
+            <button className="rb" onClick={fetchPrices} disabled={loading} style={{padding:"5px 10px",background:"transparent",border:"1px solid #2a2a2a",borderRadius:"6px",color:"#888",cursor:"pointer",fontSize:"11px"}}>
               {loading?"...":"⟳ Refresh"}
             </button>
           </div>
@@ -222,20 +228,22 @@ export default function InvestorVault() {
 
       {/* Tabs */}
       <div style={{padding:"10px 16px 0"}}>
-        <div style={{display:"flex",borderBottom:"1px solid #1e1e1e",marginBottom:"14px"}}>
+        <div style={{display:"flex",borderBottom:"1px solid #1e1e1e",marginBottom:"14px",overflowX:"auto"}}>
           {[["holdings","Holdings"],["chart","Allocation"],["add","+ Add"],["ai","🤖 AI Review"]].map(([key,label])=>(
             <button key={key} className="tb" onClick={()=>setTab(key)} style={{padding:"7px 12px",border:"none",background:"transparent",cursor:"pointer",fontSize:"11px",color:tab===key?"#c9a84c":"#444",borderBottom:tab===key?"2px solid #c9a84c":"2px solid transparent",textTransform:"uppercase",letterSpacing:"0.1em",whiteSpace:"nowrap"}}>{label}</button>
           ))}
           {tab==="holdings"&&(
-            <button className="tb" onClick={editMode?saveEdit:startEdit} style={{marginLeft:"auto",padding:"5px 12px",border:`1px solid ${editMode?"#4ade80":"#2a2a2a"}`,borderRadius:"6px",background:editMode?"#4ade8022":"transparent",cursor:"pointer",fontSize:"11px",color:editMode?"#4ade80":"#555",marginBottom:"2px"}}>
+            <button className="tb" onClick={editMode?saveEdit:startEdit} style={{marginLeft:"auto",padding:"5px 12px",border:`1px solid ${editMode?"#4ade80":"#2a2a2a"}`,borderRadius:"6px",background:editMode?"#4ade8022":"transparent",cursor:"pointer",fontSize:"11px",color:editMode?"#4ade80":"#555",marginBottom:"2px",whiteSpace:"nowrap"}}>
               {editMode?"✓ Save":"✎ Edit"}
             </button>
           )}
         </div>
 
+        {error&&<div style={{padding:"10px 14px",background:"#1a0000",border:"1px solid #330000",borderRadius:"8px",color:"#ef4444",fontSize:"12px",marginBottom:"14px"}}>{error}</div>}
+
         {/* Holdings */}
         {tab==="holdings"&&(
-          <div style={{overflowX:"auto"}}>
+          <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
             <div style={{minWidth:"720px"}}>
               <div style={{display:"grid",gridTemplateColumns:"100px 110px 100px 110px 110px 100px 70px",gap:"8px",padding:"5px 10px",marginBottom:"4px"}}>
                 {["Ticker","Current","Buy Price","Invested","Gain/Loss","Value","Shares"].map(h=>(
@@ -250,18 +258,15 @@ export default function InvestorVault() {
                 const value=current*pos.shares;
                 const invested=pos.shares*pos.buyPrice;
                 const isUp=gain>=0;
-                const isCoin=isCrypto(pos.ticker);
                 return(
                   <div key={pos.ticker} className="rh" style={{display:"grid",gridTemplateColumns:"100px 110px 100px 110px 110px 100px 70px",gap:"8px",padding:"10px 10px",borderRadius:"8px",marginBottom:"3px",background:"#0a0a0a",border:"1px solid #141414",alignItems:"center"}}>
                     <div>
                       <div style={{fontSize:"13px",fontWeight:"800",fontFamily:"'Syne',sans-serif",color:"#e8d5a3"}}>{pos.ticker}</div>
                       {p&&<div style={{fontSize:"9px",color:p.changePct>=0?"#4ade80":"#ef4444",marginTop:"2px"}}>{p.changePct>=0?"▲":"▼"} {Math.abs((p.changePct||0).toFixed(2))}% today</div>}
                     </div>
-                    <div style={{fontSize:"12px",color:current>0?"#e8d5a3":"#333",fontWeight:isCoin&&current>0?"700":"400"}}>
-                      {current>0?`$${fmt(current)}`:loading?"...":"—"}
-                    </div>
+                    <div style={{fontSize:"12px",color:current>0?"#e8d5a3":"#333"}}>{current>0?`$${fmt(current)}`:loading?"...":"—"}</div>
                     {editMode
-                      ?<input type="number" value={editData[pos.ticker]?.buyPrice||""} onChange={e=>setEditData(prev=>({...prev,[pos.ticker]:{...prev[pos.ticker],buyPrice:e.target.value}}))} style={{...inp,width:"70px"}} placeholder="$"/>
+                      ?<input type="number" value={editData[pos.ticker]?.buyPrice||""} onChange={e=>setEditData(prev=>({...prev,[pos.ticker]:{...prev[pos.ticker],buyPrice:e.target.value}}))} style={{...inp,width:"80px"}} placeholder="$"/>
                       :<div style={{fontSize:"12px",color:"#666"}}>${fmt(pos.buyPrice)}</div>
                     }
                     <div>
@@ -283,7 +288,6 @@ export default function InvestorVault() {
                   </div>
                 );
               })}
-              {/* Footer totals */}
               <div style={{display:"grid",gridTemplateColumns:"100px 110px 100px 110px 110px 100px 70px",gap:"8px",padding:"10px 10px",borderRadius:"8px",background:"#0c0c0c",border:"1px solid #1e1e1e",marginTop:"8px",marginBottom:"20px"}}>
                 <div style={{fontSize:"10px",color:"#555",textTransform:"uppercase"}}>TOTAL</div>
                 <div/><div/>
@@ -361,7 +365,6 @@ export default function InvestorVault() {
                 {aiLoading?"⏳ Analyzing your portfolio...":"✦ Get AI Portfolio Review"}
               </button>
             </div>
-
             {aiReview&&(
               <div style={{background:"#0a0a0a",border:"1px solid #c9a84c33",borderRadius:"16px",padding:"20px"}}>
                 <div style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:"16px"}}>
@@ -371,7 +374,6 @@ export default function InvestorVault() {
                 <div style={{fontSize:"13px",color:"#ccc",lineHeight:"1.7",whiteSpace:"pre-wrap"}}>{aiReview}</div>
               </div>
             )}
-
             {!aiReview&&!aiLoading&&(
               <div style={{background:"#0a0a0a",border:"1px solid #1e1e1e",borderRadius:"16px",padding:"20px"}}>
                 <div style={{fontSize:"10px",color:"#555",textTransform:"uppercase",letterSpacing:"0.15em",marginBottom:"12px"}}>What the review covers</div>
