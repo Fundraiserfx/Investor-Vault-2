@@ -1,5 +1,8 @@
 import { useState, useEffect } from "react";
 
+const FINNHUB_KEY   = import.meta.env.VITE_FINNHUB_API_KEY;
+const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY;
+
 const CRYPTO_MAP = {
   BTCUSDT: "bitcoin", ETHUSDT: "ethereum", XRPUSDT: "ripple",
   SOLUSDT: "solana",  DOGEUSDT: "dogecoin", BNBUSDT: "binance-coin",
@@ -15,8 +18,6 @@ const INITIAL_PORTFOLIO = [
   { ticker: "BTCUSDT", shares: 0, buyPrice: 0 },
   { ticker: "XRPUSDT", shares: 0, buyPrice: 0 },
 ];
-
-const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY;
 
 const isCrypto  = (t) => !!CRYPTO_MAP[t.toUpperCase()];
 const fmt       = (n) => (n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -88,35 +89,54 @@ export default function InvestorVault() {
     try{localStorage.setItem("vault_v2",JSON.stringify(portfolio));}catch{}
   }, [portfolio]);
 
-  // Route ALL price fetches through /api/quote proxy
   const fetchPrices = async () => {
     setLoading(true);
     setError(null);
     const next = {};
+
     try {
-      await Promise.all(portfolio.map(async (pos) => {
+      // ── Crypto: CoinGecko direct (supports CORS) ──
+      const cryptoTickers = portfolio.filter(p => isCrypto(p.ticker));
+      if (cryptoTickers.length > 0) {
+        const ids = [...new Set(cryptoTickers.map(p => CRYPTO_MAP[p.ticker.toUpperCase()]).filter(Boolean))].join(",");
         try {
-          const coin = isCrypto(pos.ticker);
-          const symbol = coin ? CRYPTO_MAP[pos.ticker.toUpperCase()] : pos.ticker;
-          const url = coin
-            ? `/api/quote?symbol=${symbol}&type=crypto`
-            : `/api/quote?symbol=${symbol}`;
-          const res  = await fetch(url);
+          const res  = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`);
           const data = await res.json();
-          const price = parseFloat(data.c);
+          cryptoTickers.forEach(pos => {
+            const id   = CRYPTO_MAP[pos.ticker.toUpperCase()];
+            const coin = data[id];
+            if (coin && coin.usd) {
+              const c  = coin.usd;
+              const dp = coin.usd_24h_change || 0;
+              next[pos.ticker] = { current: c, change: c*(dp/100), changePct: dp };
+            }
+          });
+        } catch {}
+      }
+
+      // ── Stocks: Finnhub direct ──
+      const stockTickers = portfolio.filter(p => !isCrypto(p.ticker));
+      await Promise.all(stockTickers.map(async (pos) => {
+        try {
+          const res  = await fetch(`https://finnhub.io/api/v1/quote?symbol=${pos.ticker}&token=${FINNHUB_KEY}`);
+          const data = await res.json();
+          // Use current price, or previous close if market is closed
+          const price = data.c > 0 ? data.c : (data.pc || 0);
           if (price > 0) {
             next[pos.ticker] = {
               current:   price,
-              change:    parseFloat(data.d)  || 0,
-              changePct: parseFloat(data.dp) || 0,
+              change:    data.c > 0 ? (data.d || 0) : 0,
+              changePct: data.c > 0 ? (data.dp || 0) : 0,
+              marketClosed: data.c === 0,
             };
           }
         } catch {}
       }));
+
       setPrices(next);
       setLastUpdated(new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}));
-    } catch {
-      setError("Failed to fetch prices. Check your connection and API keys.");
+    } catch (e) {
+      setError("Could not fetch prices — check your API keys in Vercel.");
     }
     setLoading(false);
   };
@@ -127,31 +147,20 @@ export default function InvestorVault() {
     setAiLoading(true);
     setAiReview(null);
     const rows = portfolio.map(p => {
-      const pr = prices[p.ticker];
-      const current = pr?.current || 0;
-      const gain = (current - p.buyPrice) * p.shares;
-      const gainPct = p.buyPrice > 0 ? ((current - p.buyPrice) / p.buyPrice) * 100 : 0;
+      const pr=prices[p.ticker]; const current=pr?.current||0;
+      const gain=(current-p.buyPrice)*p.shares;
+      const gainPct=p.buyPrice>0?((current-p.buyPrice)/p.buyPrice)*100:0;
       return `${p.ticker}: ${p.shares} shares @ $${p.buyPrice} buy, current $${current.toFixed(2)}, P&L: $${gain.toFixed(2)} (${gainPct.toFixed(1)}%)`;
     }).join("\n");
     const prompt = `You are an expert portfolio analyst. Here is Jean's portfolio:\n\n${rows}\n\nTotal invested: $${totalCost.toFixed(2)}\nTotal value: $${totalValue.toFixed(2)}\nAll-time P&L: $${totalGain.toFixed(2)} (${totalGainPct.toFixed(1)}%)\n\nGive a concise review covering:\n1. Health score out of 10\n2. Key strengths\n3. Key risks\n4. Sector concentration\n5. 2-3 actionable suggestions\n\nBe direct and specific. Under 300 words.`;
     try {
       const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": ANTHROPIC_KEY,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true"
-        },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 1000,
-          messages: [{ role: "user", content: prompt }]
-        })
+        method:"POST",
+        headers:{"Content-Type":"application/json","x-api-key":ANTHROPIC_KEY,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
+        body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1000,messages:[{role:"user",content:prompt}]})
       });
       const data = await res.json();
-      const text = data.content?.find(b => b.type === "text")?.text;
-      setAiReview(text || "Could not generate review.");
+      setAiReview(data.content?.find(b=>b.type==="text")?.text || "Could not generate review.");
     } catch {
       setAiReview("AI review failed. Make sure VITE_ANTHROPIC_API_KEY is set in Vercel.");
     }
@@ -182,7 +191,6 @@ export default function InvestorVault() {
         .rb:hover{background:#c9a84c22!important}
       `}</style>
 
-      {/* Header */}
       <div style={{borderBottom:"1px solid #1e1e1e",padding:"14px 16px"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div>
@@ -197,7 +205,6 @@ export default function InvestorVault() {
         </div>
       </div>
 
-      {/* Summary Bar */}
       <div style={{borderBottom:"1px solid #1a1a1a",background:"#0c0c0c"}}>
         <div style={{padding:"9px 16px",display:"flex",gap:"18px",alignItems:"center",overflowX:"auto"}}>
           {[["Day P&L",fmtDollar(dayChange),dayChange>=0?"#4ade80":"#ef4444"],
@@ -209,7 +216,7 @@ export default function InvestorVault() {
             </div>
           ))}
           <div style={{marginLeft:"auto",display:"flex",gap:"8px",alignItems:"center",flexShrink:0}}>
-            {lastUpdated&&<div style={{fontSize:"9px",color:"#333"}}>Updated {lastUpdated}</div>}
+            {lastUpdated&&<div style={{fontSize:"9px",color:"#4ade80"}}>✓ Updated {lastUpdated}</div>}
             <button className="rb" onClick={fetchPrices} disabled={loading} style={{padding:"5px 10px",background:"transparent",border:"1px solid #2a2a2a",borderRadius:"6px",color:"#888",cursor:"pointer",fontSize:"11px"}}>
               {loading?"...":"⟳ Refresh"}
             </button>
@@ -217,7 +224,6 @@ export default function InvestorVault() {
         </div>
       </div>
 
-      {/* Tabs */}
       <div style={{padding:"10px 16px 0"}}>
         <div style={{display:"flex",borderBottom:"1px solid #1e1e1e",marginBottom:"14px",overflowX:"auto"}}>
           {[["holdings","Holdings"],["chart","Allocation"],["add","+ Add"],["ai","🤖 AI Review"]].map(([key,label])=>(
@@ -232,7 +238,6 @@ export default function InvestorVault() {
 
         {error&&<div style={{padding:"10px 14px",background:"#1a0000",border:"1px solid #330000",borderRadius:"8px",color:"#ef4444",fontSize:"12px",marginBottom:"14px"}}>{error}</div>}
 
-        {/* Holdings */}
         {tab==="holdings"&&(
           <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
             <div style={{minWidth:"720px"}}>
@@ -253,11 +258,9 @@ export default function InvestorVault() {
                   <div key={pos.ticker} className="rh" style={{display:"grid",gridTemplateColumns:"100px 110px 100px 110px 110px 100px 70px",gap:"8px",padding:"10px 10px",borderRadius:"8px",marginBottom:"3px",background:"#0a0a0a",border:"1px solid #141414",alignItems:"center"}}>
                     <div>
                       <div style={{fontSize:"13px",fontWeight:"800",fontFamily:"'Syne',sans-serif",color:"#e8d5a3"}}>{pos.ticker}</div>
-                      {p&&<div style={{fontSize:"9px",color:p.changePct>=0?"#4ade80":"#ef4444",marginTop:"2px"}}>{p.changePct>=0?"▲":"▼"} {Math.abs((p.changePct||0).toFixed(2))}% today</div>}
+                      {p&&<div style={{fontSize:"9px",color:p.changePct>=0?"#4ade80":"#ef4444",marginTop:"2px"}}>{p.changePct>=0?"▲":"▼"} {Math.abs((p.changePct||0).toFixed(2))}% {p.marketClosed?"(closed)":"today"}</div>}
                     </div>
-                    <div style={{fontSize:"12px",color:current>0?"#e8d5a3":"#555"}}>
-                      {current>0?`$${fmt(current)}`:loading?"...":p?.marketClosed?"Closed":"—"}
-                    </div>
+                    <div style={{fontSize:"12px",color:current>0?"#e8d5a3":"#555"}}>{current>0?`$${fmt(current)}`:loading?"...":"—"}</div>
                     {editMode
                       ?<input type="number" value={editData[pos.ticker]?.buyPrice||""} onChange={e=>setEditData(prev=>({...prev,[pos.ticker]:{...prev[pos.ticker],buyPrice:e.target.value}}))} style={{...inp,width:"80px"}} placeholder="$"/>
                       :<div style={{fontSize:"12px",color:"#666"}}>${fmt(pos.buyPrice)}</div>
@@ -299,7 +302,6 @@ export default function InvestorVault() {
           </div>
         )}
 
-        {/* Allocation */}
         {tab==="chart"&&(
           <div style={{paddingBottom:"30px"}}>
             <div style={{background:"#0a0a0a",border:"1px solid #1e1e1e",borderRadius:"14px",padding:"18px 14px"}}>
@@ -313,7 +315,6 @@ export default function InvestorVault() {
           </div>
         )}
 
-        {/* Add */}
         {tab==="add"&&(
           <div style={{paddingBottom:"30px"}}>
             <div style={{background:"#0a0a0a",border:"1px solid #1e1e1e",borderRadius:"12px",padding:"18px"}}>
@@ -348,7 +349,6 @@ export default function InvestorVault() {
           </div>
         )}
 
-        {/* AI Review */}
         {tab==="ai"&&(
           <div style={{paddingBottom:"40px"}}>
             <div style={{background:"#0a0a0a",border:"1px solid #1e1e1e",borderRadius:"16px",padding:"20px",marginBottom:"14px"}}>
